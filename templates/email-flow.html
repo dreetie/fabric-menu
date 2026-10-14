@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Flow — Markmap</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#1e1e2e;color:#cdd6f4;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+  #toolbar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;gap:8px;align-items:center;padding:8px 14px;background:rgba(30,30,46,.95);border-bottom:1px solid #45475a;flex-wrap:wrap;}
+  #toolbar .title{font-weight:600;font-size:13px;margin-right:auto;}
+  #toolbar button{background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;}
+  #toolbar button:hover{background:#45475a;}
+  #wrap{position:fixed;top:44px;left:0;right:0;bottom:0;}
+  #markmap{width:100%;height:100%;display:block;}
+  .markmap-node .markmap-content{max-width:340px;}
+  .markmap-node.mm-toggle{cursor:pointer;}
+  .markmap-node.mm-toggle:hover{filter:brightness(1.15);}
+  .mm-meta{font-weight:600;}
+  .mm-sum{font-size:13px;font-style:italic;font-weight:400;color:#f5e0dc;}
+</style>
+</head>
+<body>
+<div id="toolbar"><span class="title">📧 Email Flow — Markmap</span>
+<span style="font-size:12px;color:#a6adc8;margin-right:auto;">💬 group &nbsp;·&nbsp; <span style="color:#f9a825;">🔒 1:1</span></span>
+<button onclick="mm&&mm.fit()">⛶ Fit View</button>
+<button onclick="mm&&mm.rescale(1.35)">🔍 Zoom In</button>
+<button onclick="mm&&mm.rescale(0.75)">🔎 Zoom Out</button>
+<button onclick="adjustSpacing(8,20)">⇔ More Space</button>
+<button onclick="adjustSpacing(-8,-20)">⇔ Less Space</button>
+<button onclick="navigator.clipboard.writeText(document.getElementById('mm-md').textContent).then(function(b){b.textContent='✔ Copied';setTimeout(function(){b.textContent='📋 Copy Markdown'},1200)})">📋 Copy Markdown</button>
+</div>
+<div id="wrap"><svg id="markmap"></svg></div>
+<script type="text/template" id="mm-md">
+__FABRIC_MARKDOWN__
+</script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.8.5"></script>
+<script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.16.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/markmap-view@0.16.0"></script>
+<script>
+(function () {
+  var mdEl = document.getElementById('mm-md');
+  var SPACING = { v: 28, h: 180 };
+  window.adjustSpacing = function (dv, dh) {
+    SPACING.v = Math.max(4, SPACING.v + dv);
+    SPACING.h = Math.max(40, SPACING.h + dh);
+    if (window.mm) {
+      window.mm.setOptions({ spacingVertical: SPACING.v, spacingHorizontal: SPACING.h });
+      window.mm.renderData();
+    }
+  };
+  function render() {
+    var M = window.markmap;
+    var svg = document.getElementById('markmap');
+    var msg = document.getElementById('msg');
+    if (!M || !M.Markmap || !M.Transformer || !window.d3) {
+      if (!msg) {
+        msg = document.createElement('div');
+        msg.id = 'msg';
+        msg.style.cssText = 'padding:40px;font-size:14px;white-space:pre-wrap;';
+        document.body.appendChild(msg);
+      }
+      msg.textContent = 'Could not load markmap from CDN. Offline? Raw markdown below:\n\n' + mdEl.textContent;
+      return;
+    }
+    var transformer = new M.Transformer();
+    var result = transformer.transform(mdEl.textContent);
+    var front = (result.frontmatter && result.frontmatter.markmap) || {};
+    var opts = M.deriveOptions(Object.assign(
+      { maxWidth: 340, initialExpandLevel: -1, spacingVertical: SPACING.v, spacingHorizontal: SPACING.h, fitRatio: 0.9, duration: 200 },
+      front
+    ));
+    var SPAN_RE = /<span class="mm-body">([\s\S]*?)<\/span>/;
+
+    function stripEmails(label) {
+      var emails = [];
+      function push(a) { a = a.replace(/^["']|["']$/g, ''); if (emails.indexOf(a) === -1) emails.push(a); }
+      label = label.replace(/<a href="mailto:([^"]+)"[^>]*>([^<]*)<\/a>/g, function (m, addr) { push(addr); return ''; });
+      label = label.replace(/["']?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}["']?/g, function (m) { push(m); return ''; });
+      label = label.replace(/<strong>[, ]+/g, '<strong>');
+      label = label.replace(/([:\u2192])\s*,/g, '$1');
+      label = label.replace(/\s*<\/strong>/g, '</strong>');
+      label = label.replace(/<strong>\s*/g, '<strong>');
+      label = label.replace(/\s*,\s*/g, ', ');
+      label = label.replace(/,\s*$/g, '');
+      label = label.replace(/\s{2,}/g, ' ');
+      return { label: label, emails: emails };
+    }
+
+    function decorate(label) {
+      var i = label.indexOf('<br>');
+      var meta = i === -1 ? label : label.slice(0, i);
+      var rest = i === -1 ? '' : label.slice(i + 4);
+      var out = '<span class="mm-meta">' + meta + '</span>';
+      if (rest) {
+        var j = rest.indexOf('📝');
+        if (j !== -1) {
+          var fromSum = rest.slice(j);
+          var m = fromSum.match(/<br>|<span class="mm-body">/);
+          var sumText = m ? fromSum.slice(0, m.index) : fromSum;
+          var afterSum = m ? fromSum.slice(m.index) : '';
+          out += '<br>' + rest.slice(0, j) + '<span class="mm-sum">' + sumText + '</span>' + afterSum;
+        } else {
+          out += '<br>' + rest;
+        }
+      }
+      return out;
+    }
+
+    function collectCollapsible(node) {
+      var content = node.content;
+      var br = content.indexOf('<br>');
+      var first = br === -1 ? content : content.slice(0, br);
+      var rest = br === -1 ? '' : content.slice(br);
+      var s = stripEmails(first);
+      var emailLine = s.emails.length ? '📧 ' + s.emails.join(', ') : '';
+      var rebuilt = s.label + rest;
+      var m = content.match(SPAN_RE);
+      if (m) {
+        node.__full = content;
+        node.__label = decorate(s.label + rest.replace(SPAN_RE, ''));
+        node.__body = emailLine ? emailLine + '<br>' + m[1] : m[1];
+        node.content = '\u25B8 ' + node.__label;
+      } else {
+        node.__full = content;
+        if (emailLine) {
+          var i = rebuilt.indexOf('<br>');
+          rebuilt = i === -1 ? rebuilt + '<br>' + emailLine : rebuilt.slice(0, i) + '<br>' + emailLine + rebuilt.slice(i);
+        }
+        node.__label = decorate(rebuilt);
+        node.content = node.__label;
+      }
+      (node.children || []).forEach(collectCollapsible);
+    }
+
+    collectCollapsible(result.root);
+    window.mm = M.Markmap.create(svg, opts, result.root);
+    window.mm.options.color = function (node) {
+      var c = (node && node.content) || '';
+      if (c.indexOf('\uD83D\uDD12') !== -1) return '#f9a825';
+      var p = (node && node.state && node.state.path) || '';
+      return M.defaultColorFn ? M.defaultColorFn(p) : d3.scaleOrdinal(d3.schemeCategory10)(p);
+    };
+    window.mm.setData(result.root);
+    function applyToggleMarks() {
+      window.mm.svg.selectAll('.markmap-node').classed('mm-toggle', function (d) {
+        return d && d.data && d.data.__body !== undefined;
+      });
+    }
+    applyToggleMarks();
+    var downX = null, downY = null;
+    svg.addEventListener('mousedown', function (e) { downX = e.clientX; downY = e.clientY; });
+    svg.addEventListener('click', function (e) {
+      if (e.target && e.target.tagName === 'circle') return;
+      var g = e.target.closest('.markmap-node');
+      if (!g) return;
+      var d = d3.select(g).datum();
+      var data = d && d.data;
+      if (!data || data.__body === undefined) return;
+      if (downX !== null && (Math.abs(e.clientX - downX) > 5 || Math.abs(e.clientY - downY) > 5)) return;
+      e.preventDefault();
+      if (data.__collapsed === false) {
+        data.__collapsed = true;
+        data.content = '\u25B8 ' + data.__label;
+      } else {
+        data.__collapsed = false;
+        data.content = '\u25BE ' + data.__full;
+      }
+      window.mm.setData(result.root);
+      applyToggleMarks();
+    });
+    var MIN = 0.55;
+    var k = window.d3.zoomTransform(svg).k;
+    if (k < MIN) mm.rescale(MIN / k);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', render);
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>

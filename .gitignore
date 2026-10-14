@@ -1,0 +1,7 @@
+# Local notes, backups and personal data
+*.bak
+*.tmp
+*.orig
+.env
+*.key
+fabric-outputs/
