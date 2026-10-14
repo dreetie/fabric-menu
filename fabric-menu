@@ -117,12 +117,18 @@ _read_config_file() {
 
 # Write all settings, one commented block each, so the file always looks the same.
 save_config() {
-    local k
+    local k v
     {
         printf '# %s configuration\n' "$APP_NAME"
         printf '# Plain KEY=value lines. Edit here or use the Settings entry in the menu.\n'
         for k in "${SETTING_KEYS[@]}"; do
-            printf '\n# %s\n%s=%s\n' "${SETTING_DESC[$k]}" "$k" "${!k}"
+            v="${!k}"
+            # Store paths as ~/... so the file holds no machine-specific home folder.
+            if [[ "$k" == OUTPUT_DIR || "$k" == ROFI_THEME ]] && [[ "$v" == "$HOME/"* ]]; then
+                # shellcheck disable=SC2088  # literal ~ is intended
+                v="~/${v#"$HOME"/}"
+            fi
+            printf '\n# %s\n%s=%s\n' "${SETTING_DESC[$k]}" "$k" "$v"
         done
     } > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 }
