@@ -40,7 +40,7 @@ so you can also edit it by hand. An old `config.sh` is converted automatically (
 |---|---|
 | `CAPTURE_MODE` | `highlight` (highlighted text, else clipboard), `clipboard` (only what is copied), `copy-keystroke` (presses Ctrl+C for you) |
 | `CUSTOM_COMMANDS` | Shows the "Custom Command" menu item (off by default, see the warning below) |
-| `URL_FETCH` | How a link becomes text: `auto` (default: Jina Reader first, then a direct download with `curl` + `python3` if Jina is blocked or fails), `jina` (only Jina, via `fabric -u`) or `local` (only the direct download) |
+| `URL_FETCH` | How a link becomes text: `auto` (default: Jina Reader first, using the Jina key from `fabric --setup` if there is one, then a direct download with `curl` + `python3` if Jina is blocked or fails), `jina` (only Jina, via `fabric -u`) or `local` (only the direct download) |
 | `STRIP_CODE_FENCE` | Remove a stray ```` ```markdown ```` fence the model wraps around its answer |
 | `MENU_TOOL` | `auto`, `rofi`, `wofi` |
 | `QUICK_RUN` | Run immediately after choosing a pattern |

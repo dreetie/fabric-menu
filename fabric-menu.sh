@@ -219,9 +219,25 @@ HTML_TO_TEXT_PY='import sys,html,re; t=sys.stdin.buffer.read().decode("utf-8","i
 FETCH_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
 MIN_PAGE_CHARS=300
 
+# The Jina key that 'fabric --setup' stored (any "...JINA..." line in Fabric's .env),
+# or $JINA_API_KEY. Empty = anonymous access, which Jina blocks for some sites.
+_jina_key() {
+    local key="${JINA_API_KEY:-}" env_file="${XDG_CONFIG_HOME:-$HOME/.config}/fabric/.env"
+    [[ -z "$key" && -r "$env_file" ]] && \
+        key=$(sed -n -E 's/^[[:space:]]*[A-Za-z_]*JINA[A-Za-z_]*[[:space:]]*=[[:space:]]*//p' "$env_file" | head -n 1)
+    key="${key%\"}"; key="${key#\"}"; key="${key%\'}"; key="${key#\'}"
+    printf '%s' "$key"
+}
+
 _fetch_jina() {
-    local text
-    text=$(curl -fsSL --max-time 60 "https://r.jina.ai/$1" 2>/dev/null) || return 1
+    local text key
+    key=$(_jina_key)
+    if [[ -n "$key" ]]; then
+        # The key goes in through stdin so it never shows up in the process list.
+        text=$(printf 'header = "Authorization: Bearer %s"\n' "$key" | curl -K - -fsSL --max-time 60 "https://r.jina.ai/$1" 2>/dev/null) || return 1
+    else
+        text=$(curl -fsSL --max-time 60 "https://r.jina.ai/$1" 2>/dev/null) || return 1
+    fi
     (( ${#text} >= MIN_PAGE_CHARS )) || return 1
     # A blocked site gets a short "blocked" message back as if it were the page.
     if (( ${#text} < 2000 )) && grep -qiE 'blocked|access to domain|captcha' <<< "$text"; then return 1; fi
