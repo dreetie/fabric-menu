@@ -339,7 +339,7 @@ _settings_menu() {
                 ;;
             model)
                 send_notification "$APP_NAME" "Loading available models..." "view-refresh"
-                opts=$("$FABRIC_CMD_RESOLVED" --listmodels 2>/dev/null | grep -v '^$' || true)
+                opts=$(_list_models)
                 new=$(run_menu "${SETTING_LABEL[$k]}" $'🚫 None (Fabric default)\n'"$opts" "${SETTING_DESC[$k]}")
                 [[ "$new" == "🚫 None (Fabric default)" ]] && new="__NONE__"
                 ;;
@@ -777,10 +777,19 @@ handle_result() {
 }
 
 _run_and_handle() {
-    local result exit_code=0
+    local result errors err_file exit_code=0
+    err_file=$(mktemp /tmp/fabric-menu-err-XXXXXX 2>/dev/null) || err_file=/dev/null
     set +o pipefail
-    result=$(eval "$CMD_LOG" 2>&1) || exit_code=$?
+    # Keep Fabric's messages (stderr) apart from the answer (stdout), so a
+    # harmless warning never ends up inside the result text.
+    result=$(eval "$CMD_LOG" 2>"$err_file") || exit_code=$?
     set -o pipefail
+    # For languages Fabric has no interface translation for (e.g. nl-x-dutch) it
+    # prints this warning although the answer itself is fine.
+    errors=$(grep -v '^Failed to download translation for language' "$err_file" 2>/dev/null || true)
+    [[ "$err_file" != /dev/null ]] && rm -f "$err_file"
+    # Only show the messages when the run failed.
+    (( exit_code != 0 )) && [[ -n "$errors" ]] && result="$errors${result:+$'\n'$result}"
     handle_result "$exit_code" "$result"
 }
 
@@ -901,6 +910,38 @@ _chain_display() {
     printf '%s' "${display_arr[*]}"
 }
 
+# "--listmodels" prints lines like "<tab>[255]<tab>OpenRouter|vendor/model".
+# Strip the tab and the [number] so only "OpenRouter|vendor/model" is left.
+_clean_model() {
+    local m="$1"
+    m="${m#"${m%%[![:space:]]*}"}"
+    m="${m#\[*\]}"
+    m="${m#"${m%%[![:space:]]*}"}"
+    printf '%s' "$m"
+}
+
+# Fabric's model list, one clean "Vendor|model" per line (the raw list as a
+# fallback if its format is not recognised).
+_list_models() {
+    local raw line cleaned=""
+    raw=$("$FABRIC_CMD_RESOLVED" --listmodels 2>/dev/null | grep -v '^$' || true)
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*\[[0-9]+\] ]] && cleaned+="$(_clean_model "$line")"$'\n'
+    done <<< "$raw"
+    printf '%s' "${cleaned:-$raw}"
+}
+
+# Fabric wants the vendor and the model as two flags: -V "Vendor" -m "model".
+# Accepts "Vendor|model" or just "model" and prints the flags (leading space).
+_model_flags() {
+    local m vendor="" model
+    m=$(_clean_model "$1")
+    [[ -z "$m" ]] && return 0
+    if [[ "$m" == *"|"* ]]; then vendor="${m%%|*}"; model="${m#*|}"; else model="$m"; fi
+    [[ -n "$vendor" ]] && printf ' -V "%s"' "${vendor//\"/\\\"}"
+    printf ' -m "%s"' "${model//\"/\\\"}"
+}
+
 _build_command_string() {
     local eff_lang="${SELECTED_LANG:-${DEFAULT_LANG:-}}"
     local eff_model="${SELECTED_MODEL:-${DEFAULT_MODEL:-}}"
@@ -908,7 +949,6 @@ _build_command_string() {
 
     # Escape inputs for safe eval injection
     local esc_lang="${eff_lang//\"/\\\"}"
-    local esc_model="${eff_model//\"/\\\"}"
     local esc_strat="${eff_strat//\"/\\\"}"
     local esc_ctx="${SELECTED_CONTEXT//\"/\\\"}"
     local esc_custom="${SELECTED_CUSTOM_ARGS//\"/\\\"}"
@@ -916,7 +956,7 @@ _build_command_string() {
 
     local lang_arg="" other_args=""
     [[ -n "$eff_lang"  ]] && lang_arg=" -g \"$esc_lang\""
-    [[ -n "$eff_model" ]] && other_args+=" -m \"$esc_model\""
+    [[ -n "$eff_model" ]] && other_args+="$(_model_flags "$eff_model")"
     [[ -n "$eff_strat" ]] && other_args+=" --strategy \"$esc_strat\""
     [[ -n "$SELECTED_CONTEXT" ]] && other_args+=" -C \"$esc_ctx\""
     [[ -n "$SELECTED_CUSTOM_ARGS" ]] && other_args+=" $esc_custom"
@@ -1117,7 +1157,7 @@ _options_submenu() {
             "🤖 Choose Custom Model...")
                 send_notification "Fabric Menu" "Loading available models..." "view-refresh"
                 local models_list model_items model_choice
-                models_list=$("$FABRIC_CMD_RESOLVED" --listmodels 2>/dev/null | grep -v '^$' || true)
+                models_list=$(_list_models)
                 [[ -z "$models_list" ]] && \
                     models_list="openai/gpt-4o"$'\n'"anthropic/claude-sonnet-4-5"$'\n'"google/gemini-2.0-flash"$'\n'"ollama/llama3"
 
@@ -1155,7 +1195,7 @@ _options_submenu() {
                 local eff_strat="${SELECTED_STRATEGY:-${DEFAULT_STRATEGY:-}}"
                 local tl="" to=""
                 [[ -n "$eff_lang"  ]] && tl=" -g \"$eff_lang\""
-                [[ -n "$eff_model" ]] && to=" -m \"$eff_model\""
+                [[ -n "$eff_model" ]] && to="$(_model_flags "$eff_model")"
                 [[ -n "$eff_strat" ]] && to+=" --strategy \"$eff_strat\""
                 [[ -n "$SELECTED_CONTEXT" ]] && to+=" -C \"$SELECTED_CONTEXT\""
                 [[ -n "$SELECTED_CUSTOM_ARGS" ]] && to+=" $SELECTED_CUSTOM_ARGS"
