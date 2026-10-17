@@ -939,10 +939,16 @@ _build_command_string() {
             local pat="${item#PAT:}"
             _ensure_pattern_installed "$pat"
             if (( i == 0 )); then
+                # Fabric's -g also picks the YouTube subtitle language, so a language
+                # like "nl-x-dutch" must never reach the transcript download.
                 if   [[ "$IS_YOUTUBE" == true ]]; then
-                    pipe_cmd="$FABRIC_CMD_RESOLVED${lang_arg} -y \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
+                    if [[ -z "$lang_arg" ]]; then
+                        pipe_cmd="$FABRIC_CMD_RESOLVED -y \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${stage_extra}"
+                    else
+                        pipe_cmd="$FABRIC_CMD_RESOLVED -y \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
+                    fi
                 elif [[ "$IS_URL"     == true ]]; then
-                    pipe_cmd="$FABRIC_CMD_RESOLVED${lang_arg} -u \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
+                    pipe_cmd="$FABRIC_CMD_RESOLVED -u \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${lang_arg}${stage_extra}"
                 else
                     pipe_cmd="printf '%s' \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
                 fi
@@ -1168,9 +1174,13 @@ _options_submenu() {
                         local pat="${item#PAT:}"
                         if (( i == 0 )); then
                             if   [[ "$IS_YOUTUBE" == true ]]; then
-                                pipe_tpl="$FABRIC_CMD_RESOLVED${tl} -y \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
+                                if [[ -z "$tl" ]]; then
+                                    pipe_tpl="$FABRIC_CMD_RESOLVED -y \"{{INPUT}}\" -p \"$pat\"${to}"
+                                else
+                                    pipe_tpl="$FABRIC_CMD_RESOLVED -y \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
+                                fi
                             elif [[ "$IS_URL"     == true ]]; then
-                                pipe_tpl="$FABRIC_CMD_RESOLVED${tl} -u \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
+                                pipe_tpl="$FABRIC_CMD_RESOLVED -u \"{{INPUT}}\" -p \"$pat\"${tl}${to}"
                             else
                                 pipe_tpl="printf '%s' \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
                             fi
