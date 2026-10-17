@@ -33,13 +33,13 @@ readonly SCRIPT_PATH
 #   type: bool | enum:a,b,c | text | lang | model | strategy
 # ------------------------------------------------------------------------------
 SETTING_KEYS=(
-    MENU_TOOL CLIPBOARD_TOOL CAPTURE_MODE CUSTOM_COMMANDS FABRIC_CMD
+    MENU_TOOL CLIPBOARD_TOOL CAPTURE_MODE CUSTOM_COMMANDS FABRIC_CMD URL_FETCH
     DEFAULT_LANG DEFAULT_MODEL DEFAULT_STRATEGY
     QUICK_RUN SHOW_PREVIEW STRIP_CODE_FENCE NOTIFICATIONS
     OUTPUT_DIR ROFI_THEME
 )
 declare -A SETTING_DEFAULT=(
-    [MENU_TOOL]="auto" [CLIPBOARD_TOOL]="auto" [CAPTURE_MODE]="highlight" [CUSTOM_COMMANDS]="false" [FABRIC_CMD]="auto"
+    [MENU_TOOL]="auto" [CLIPBOARD_TOOL]="auto" [CAPTURE_MODE]="highlight" [CUSTOM_COMMANDS]="false" [FABRIC_CMD]="auto" [URL_FETCH]="auto"
     [DEFAULT_LANG]="" [DEFAULT_MODEL]="" [DEFAULT_STRATEGY]=""
     [QUICK_RUN]="false" [SHOW_PREVIEW]="false"
     [STRIP_CODE_FENCE]="true" [NOTIFICATIONS]="true"
@@ -49,14 +49,14 @@ declare -A SETTING_TYPE=(
     [MENU_TOOL]="enum:auto,rofi,wofi"
     [CLIPBOARD_TOOL]="enum:auto,wl-clipboard,xclip"
     [CAPTURE_MODE]="enum:highlight,clipboard,copy-keystroke" [CUSTOM_COMMANDS]="bool"
-    [FABRIC_CMD]="text" [DEFAULT_LANG]="lang" [DEFAULT_MODEL]="model" [DEFAULT_STRATEGY]="strategy"
+    [FABRIC_CMD]="text" [URL_FETCH]="enum:auto,jina,local" [DEFAULT_LANG]="lang" [DEFAULT_MODEL]="model" [DEFAULT_STRATEGY]="strategy"
     [QUICK_RUN]="bool" [SHOW_PREVIEW]="bool"
     [STRIP_CODE_FENCE]="bool" [NOTIFICATIONS]="bool"
     [OUTPUT_DIR]="text" [ROFI_THEME]="text"
 )
 declare -A SETTING_LABEL=(
     [MENU_TOOL]="Menu program" [CLIPBOARD_TOOL]="Clipboard program" [CAPTURE_MODE]="Input capture" [CUSTOM_COMMANDS]="Custom commands"
-    [FABRIC_CMD]="Fabric command" [DEFAULT_LANG]="Default language" [DEFAULT_MODEL]="Default model"
+    [FABRIC_CMD]="Fabric command" [URL_FETCH]="Link download" [DEFAULT_LANG]="Default language" [DEFAULT_MODEL]="Default model"
     [DEFAULT_STRATEGY]="Default strategy" [QUICK_RUN]="Quick run" [SHOW_PREVIEW]="Result preview"
     [STRIP_CODE_FENCE]="Strip code fence" [NOTIFICATIONS]="Notifications"
     [OUTPUT_DIR]="Output folder" [ROFI_THEME]="Rofi theme file"
@@ -67,6 +67,7 @@ declare -A SETTING_DESC=(
     [CAPTURE_MODE]="How the input text is captured: highlight (the text you highlighted, else the clipboard), clipboard (only what is already copied), or copy-keystroke (presses Ctrl+C for you; needs wtype or ydotool)."
     [CUSTOM_COMMANDS]="WARNING: shows the 'Custom Command' menu item, which runs any shell command you type, with your own permissions. A wrong command (for example rm) can damage your system. true or false."
     [FABRIC_CMD]="Fabric program: auto, fabric or fabric-ai."
+    [URL_FETCH]="How a link is turned into text: auto (try the Jina Reader service through Fabric first, and download the page on this computer with curl if Jina is blocked or fails), jina (only Jina) or local (only this computer: curl plus python3)."
     [DEFAULT_LANG]="Default output language, e.g. nl-x-dutch or en. Empty = Fabric's default."
     [DEFAULT_MODEL]="Default AI model. Empty = Fabric's configured default."
     [DEFAULT_STRATEGY]="Default prompt strategy, e.g. cot. Empty = none."
@@ -206,6 +207,57 @@ _load_defaults
 _read_config_file "$CONFIG_FILE"
 # Older versions used 'auto' and 'primary'; both mean "highlight" now.
 case "$CAPTURE_MODE" in auto|primary|"") CAPTURE_MODE="highlight" ;; esac
+
+# ------------------------------------------------------------------------------
+# Link download. Fabric's own '-u' uses the Jina Reader service, which some news
+# sites block (Jina then returns a short "blocked" text instead of an error). The
+# menu can instead run this script as 'fabric-menu.sh --fetch-text URL', which
+# prints the text of a page: Jina first, then a plain download with curl.
+# ------------------------------------------------------------------------------
+case "$URL_FETCH" in auto|jina|local) ;; *) URL_FETCH="auto" ;; esac
+HTML_TO_TEXT_PY='import sys,html,re; t=sys.stdin.buffer.read().decode("utf-8","ignore"); t=re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>"," ",t); t=re.sub(r"(?s)<[^>]+>","\n",t); t=html.unescape(t); print(re.sub(r"\n\s*\n+","\n",t))'
+FETCH_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+MIN_PAGE_CHARS=300
+
+_fetch_jina() {
+    local text
+    text=$(curl -fsSL --max-time 60 "https://r.jina.ai/$1" 2>/dev/null) || return 1
+    (( ${#text} >= MIN_PAGE_CHARS )) || return 1
+    # A blocked site gets a short "blocked" message back as if it were the page.
+    if (( ${#text} < 2000 )) && grep -qiE 'blocked|access to domain|captcha' <<< "$text"; then return 1; fi
+    printf '%s\n' "$text"
+}
+
+_fetch_local() {
+    local text
+    text=$(curl -fsSL --compressed --max-time 30 -A "$FETCH_USER_AGENT" "$1" 2>/dev/null | python3 -c "$HTML_TO_TEXT_PY") || return 1
+    (( ${#text} >= MIN_PAGE_CHARS )) || return 1
+    printf '%s\n' "$text"
+}
+
+_fetch_page_text() {
+    local url="$1" need
+    for need in curl python3; do
+        command -v "$need" >/dev/null 2>&1 || { echo "Link download needs '$need' (install it, or set Link download to jina)." >&2; return 1; }
+    done
+    case "$URL_FETCH" in
+        jina)  _fetch_jina "$url" && return 0 ;;
+        local) _fetch_local "$url" && return 0 ;;
+        *)     _fetch_jina "$url" && return 0
+               if [[ "$NOTIFICATIONS" == "true" ]] && command -v notify-send >/dev/null 2>&1; then
+                   notify-send "Fabric Menu" "Jina could not read the page; trying a direct download..." -i dialog-warning -t 3000
+               fi
+               _fetch_local "$url" && return 0 ;;
+    esac
+    echo "Could not read the page: $url" >&2
+    echo "The site may block automated downloads or need JavaScript. Select the article text and run it as plain text instead." >&2
+    return 1
+}
+
+if [[ "${1:-}" == "--fetch-text" ]]; then
+    _fetch_page_text "${2:-}"
+    exit $?
+fi
 
 # Parse --dry-run / -d flag.
 DRY_RUN=false
@@ -988,7 +1040,12 @@ _build_command_string() {
                         pipe_cmd="$FABRIC_CMD_RESOLVED -y \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
                     fi
                 elif [[ "$IS_URL"     == true ]]; then
-                    pipe_cmd="$FABRIC_CMD_RESOLVED -u \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${lang_arg}${stage_extra}"
+                    if [[ "$URL_FETCH" == "jina" ]]; then
+                        pipe_cmd="$FABRIC_CMD_RESOLVED -u \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${lang_arg}${stage_extra}"
+                    else
+                        # Page text first (see --fetch-text); Fabric only runs if that worked.
+                        pipe_cmd="FM_PAGE=\$(\"$SCRIPT_PATH\" --fetch-text \"\$FABRIC_MENU_INPUT\") && printf '%s' \"\$FM_PAGE\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
+                    fi
                 else
                     pipe_cmd="printf '%s' \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
                 fi
@@ -1220,7 +1277,11 @@ _options_submenu() {
                                     pipe_tpl="$FABRIC_CMD_RESOLVED -y \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
                                 fi
                             elif [[ "$IS_URL"     == true ]]; then
-                                pipe_tpl="$FABRIC_CMD_RESOLVED -u \"{{INPUT}}\" -p \"$pat\"${tl}${to}"
+                                if [[ "$URL_FETCH" == "jina" ]]; then
+                                    pipe_tpl="$FABRIC_CMD_RESOLVED -u \"{{INPUT}}\" -p \"$pat\"${tl}${to}"
+                                else
+                                    pipe_tpl="FM_PAGE=\$(\"$SCRIPT_PATH\" --fetch-text \"{{INPUT}}\") && printf '%s' \"\$FM_PAGE\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
+                                fi
                             else
                                 pipe_tpl="printf '%s' \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
                             fi
