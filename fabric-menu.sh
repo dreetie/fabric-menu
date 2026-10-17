@@ -33,13 +33,13 @@ readonly SCRIPT_PATH
 #   type: bool | enum:a,b,c | text | lang | model | strategy
 # ------------------------------------------------------------------------------
 SETTING_KEYS=(
-    MENU_TOOL CLIPBOARD_TOOL CAPTURE_MODE CUSTOM_COMMANDS FABRIC_CMD
+    MENU_TOOL CLIPBOARD_TOOL CAPTURE_MODE CUSTOM_COMMANDS FABRIC_CMD URL_FETCH
     DEFAULT_LANG DEFAULT_MODEL DEFAULT_STRATEGY
     QUICK_RUN SHOW_PREVIEW STRIP_CODE_FENCE NOTIFICATIONS
     OUTPUT_DIR ROFI_THEME
 )
 declare -A SETTING_DEFAULT=(
-    [MENU_TOOL]="auto" [CLIPBOARD_TOOL]="auto" [CAPTURE_MODE]="highlight" [CUSTOM_COMMANDS]="false" [FABRIC_CMD]="auto"
+    [MENU_TOOL]="auto" [CLIPBOARD_TOOL]="auto" [CAPTURE_MODE]="highlight" [CUSTOM_COMMANDS]="false" [FABRIC_CMD]="auto" [URL_FETCH]="jina"
     [DEFAULT_LANG]="" [DEFAULT_MODEL]="" [DEFAULT_STRATEGY]=""
     [QUICK_RUN]="false" [SHOW_PREVIEW]="false"
     [STRIP_CODE_FENCE]="true" [NOTIFICATIONS]="true"
@@ -49,14 +49,14 @@ declare -A SETTING_TYPE=(
     [MENU_TOOL]="enum:auto,rofi,wofi"
     [CLIPBOARD_TOOL]="enum:auto,wl-clipboard,xclip"
     [CAPTURE_MODE]="enum:highlight,clipboard,copy-keystroke" [CUSTOM_COMMANDS]="bool"
-    [FABRIC_CMD]="text" [DEFAULT_LANG]="lang" [DEFAULT_MODEL]="model" [DEFAULT_STRATEGY]="strategy"
+    [FABRIC_CMD]="text" [URL_FETCH]="enum:jina,local" [DEFAULT_LANG]="lang" [DEFAULT_MODEL]="model" [DEFAULT_STRATEGY]="strategy"
     [QUICK_RUN]="bool" [SHOW_PREVIEW]="bool"
     [STRIP_CODE_FENCE]="bool" [NOTIFICATIONS]="bool"
     [OUTPUT_DIR]="text" [ROFI_THEME]="text"
 )
 declare -A SETTING_LABEL=(
     [MENU_TOOL]="Menu program" [CLIPBOARD_TOOL]="Clipboard program" [CAPTURE_MODE]="Input capture" [CUSTOM_COMMANDS]="Custom commands"
-    [FABRIC_CMD]="Fabric command" [DEFAULT_LANG]="Default language" [DEFAULT_MODEL]="Default model"
+    [FABRIC_CMD]="Fabric command" [URL_FETCH]="Link download" [DEFAULT_LANG]="Default language" [DEFAULT_MODEL]="Default model"
     [DEFAULT_STRATEGY]="Default strategy" [QUICK_RUN]="Quick run" [SHOW_PREVIEW]="Result preview"
     [STRIP_CODE_FENCE]="Strip code fence" [NOTIFICATIONS]="Notifications"
     [OUTPUT_DIR]="Output folder" [ROFI_THEME]="Rofi theme file"
@@ -67,6 +67,7 @@ declare -A SETTING_DESC=(
     [CAPTURE_MODE]="How the input text is captured: highlight (the text you highlighted, else the clipboard), clipboard (only what is already copied), or copy-keystroke (presses Ctrl+C for you; needs wtype or ydotool)."
     [CUSTOM_COMMANDS]="WARNING: shows the 'Custom Command' menu item, which runs any shell command you type, with your own permissions. A wrong command (for example rm) can damage your system. true or false."
     [FABRIC_CMD]="Fabric program: auto, fabric or fabric-ai."
+    [URL_FETCH]="How a link is turned into text: jina (Fabric downloads it through the Jina Reader service; some news sites block it) or local (this computer downloads the page with curl and strips the HTML with python3)."
     [DEFAULT_LANG]="Default output language, e.g. nl-x-dutch or en. Empty = Fabric's default."
     [DEFAULT_MODEL]="Default AI model. Empty = Fabric's configured default."
     [DEFAULT_STRATEGY]="Default prompt strategy, e.g. cot. Empty = none."
@@ -942,6 +943,24 @@ _model_flags() {
     printf ' -m "%s"' "${model//\"/\\\"}"
 }
 
+# Plain-text extraction used by "local" link download: HTML on stdin, text on stdout.
+HTML_TO_TEXT_PY='import sys,html,re; t=sys.stdin.buffer.read().decode("utf-8","ignore"); t=re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>"," ",t); t=re.sub(r"(?s)<[^>]+>","\n",t); t=html.unescape(t); print(re.sub(r"\n\s*\n+","\n",t))'
+FETCH_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+
+# True when links should be downloaded on this computer instead of through Jina.
+_url_fetch_local() {
+    [[ "$URL_FETCH" == "local" ]] || return 1
+    command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && return 0
+    send_notification "$APP_NAME" "Local link download needs curl and python3; using Jina instead." "dialog-warning"
+    return 1
+}
+
+# Shell fragment that prints the readable text of a page. $1 is the URL exactly
+# as it should appear in the command (already quoted).
+_local_fetch() {
+    printf '%s' "curl -fsSL --compressed --max-time 30 -A \"$FETCH_USER_AGENT\" $1 | python3 -c '$HTML_TO_TEXT_PY'"
+}
+
 _build_command_string() {
     local eff_lang="${SELECTED_LANG:-${DEFAULT_LANG:-}}"
     local eff_model="${SELECTED_MODEL:-${DEFAULT_MODEL:-}}"
@@ -988,7 +1007,12 @@ _build_command_string() {
                         pipe_cmd="$FABRIC_CMD_RESOLVED -y \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
                     fi
                 elif [[ "$IS_URL"     == true ]]; then
-                    pipe_cmd="$FABRIC_CMD_RESOLVED -u \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${lang_arg}${stage_extra}"
+                    if _url_fetch_local; then
+                        # pipefail: a failed download must fail the run, not feed Fabric nothing.
+                        pipe_cmd="set -o pipefail; $(_local_fetch "\"\$FABRIC_MENU_INPUT\"") | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
+                    else
+                        pipe_cmd="$FABRIC_CMD_RESOLVED -u \"\$FABRIC_MENU_INPUT\" -p \"$pat\"${lang_arg}${stage_extra}"
+                    fi
                 else
                     pipe_cmd="printf '%s' \"\$FABRIC_MENU_INPUT\" | $FABRIC_CMD_RESOLVED${lang_arg} -p \"$pat\"${stage_extra}"
                 fi
@@ -1220,7 +1244,11 @@ _options_submenu() {
                                     pipe_tpl="$FABRIC_CMD_RESOLVED -y \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
                                 fi
                             elif [[ "$IS_URL"     == true ]]; then
-                                pipe_tpl="$FABRIC_CMD_RESOLVED -u \"{{INPUT}}\" -p \"$pat\"${tl}${to}"
+                                if _url_fetch_local; then
+                                    pipe_tpl="set -o pipefail; $(_local_fetch "\"{{INPUT}}\"") | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
+                                else
+                                    pipe_tpl="$FABRIC_CMD_RESOLVED -u \"{{INPUT}}\" -p \"$pat\"${tl}${to}"
+                                fi
                             else
                                 pipe_tpl="printf '%s' \"{{INPUT}}\" | $FABRIC_CMD_RESOLVED${tl} -p \"$pat\"${to}"
                             fi

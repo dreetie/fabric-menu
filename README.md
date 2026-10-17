@@ -40,6 +40,7 @@ so you can also edit it by hand. An old `config.sh` is converted automatically (
 |---|---|
 | `CAPTURE_MODE` | `highlight` (highlighted text, else clipboard), `clipboard` (only what is copied), `copy-keystroke` (presses Ctrl+C for you) |
 | `CUSTOM_COMMANDS` | Shows the "Custom Command" menu item (off by default, see the warning below) |
+| `URL_FETCH` | `jina` (default: Fabric fetches links through the Jina Reader service) or `local` (this computer downloads the page with `curl` and strips the HTML with `python3`; useful when a news site blocks Jina) |
 | `STRIP_CODE_FENCE` | Remove a stray ```` ```markdown ```` fence the model wraps around its answer |
 | `MENU_TOOL` | `auto`, `rofi`, `wofi` |
 | `QUICK_RUN` | Run immediately after choosing a pattern |
