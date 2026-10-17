@@ -339,6 +339,8 @@ run_menu() {
         local -a theme_args=() extra=()
         [[ -n "$ROFI_THEME" ]] && theme_args=(-theme "$ROFI_THEME")
         [[ -n "$prefill" ]] && extra=(-filter "$prefill")
+        # rofi reads the message as markup: a bare & or < (as in "a && b") would hide it.
+        mesg="${mesg//&/&amp;}"; mesg="${mesg//</&lt;}"; mesg="${mesg//>/&gt;}"
         printf '%s' "$items" | rofi -dmenu -i -p "$prompt" -mesg "$mesg" \
             "${extra[@]}" "${theme_args[@]}" -theme-str 'window {width: 80%;} listview {lines: 12; fixed: false;} element-text {wrap: true; ellipsize: none;}'
     else
