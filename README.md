@@ -24,7 +24,7 @@ press your shortcut, pick a pattern, and the result lands in your clipboard.
 ```bash
 git clone https://github.com/dreetie/fabric-menu.git
 mkdir -p ~/.local/bin
-ln -s "$PWD/fabric-menu/fabric-menu" ~/.local/bin/fabric-menu   # a link keeps patterns/ and templates/ findable
+ln -s "$PWD/fabric-menu/fabric-menu.sh" ~/.local/bin/fabric-menu   # a link keeps patterns/ and templates/ findable
 ```
 
 Then bind `fabric-menu` to a shortcut (KDE: System Settings → Shortcuts; Hyprland:
