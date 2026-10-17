@@ -777,10 +777,19 @@ handle_result() {
 }
 
 _run_and_handle() {
-    local result exit_code=0
+    local result errors err_file exit_code=0
+    err_file=$(mktemp /tmp/fabric-menu-err-XXXXXX 2>/dev/null) || err_file=/dev/null
     set +o pipefail
-    result=$(eval "$CMD_LOG" 2>&1) || exit_code=$?
+    # Keep Fabric's messages (stderr) apart from the answer (stdout), so a
+    # harmless warning never ends up inside the result text.
+    result=$(eval "$CMD_LOG" 2>"$err_file") || exit_code=$?
     set -o pipefail
+    # For languages Fabric has no interface translation for (e.g. nl-x-dutch) it
+    # prints this warning although the answer itself is fine.
+    errors=$(grep -v '^Failed to download translation for language' "$err_file" 2>/dev/null || true)
+    [[ "$err_file" != /dev/null ]] && rm -f "$err_file"
+    # Only show the messages when the run failed.
+    (( exit_code != 0 )) && [[ -n "$errors" ]] && result="$errors${result:+$'\n'$result}"
     handle_result "$exit_code" "$result"
 }
 
